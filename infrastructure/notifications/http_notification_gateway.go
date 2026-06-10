@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mercadocercano/go-shared/domain/port"
+	"github.com/hornosg/go-shared/domain/port"
 )
 
 // HTTPNotificationGateway implements NotificationGateway by calling the notifications-service REST API.

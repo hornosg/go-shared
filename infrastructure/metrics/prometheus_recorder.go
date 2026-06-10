@@ -6,7 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	sharedport "github.com/mercadocercano/go-shared/domain/port"
+	sharedport "github.com/hornosg/go-shared/domain/port"
 )
 
 // PrometheusRecorder implements MetricsRecorder by routing MetricEvents to Prometheus instruments.

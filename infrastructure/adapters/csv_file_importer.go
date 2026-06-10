@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/mercadocercano/go-shared/domain/port"
+	"github.com/hornosg/go-shared/domain/port"
 )
 
 // RowParser is implemented by concrete importers to convert a CSV row into a typed record.

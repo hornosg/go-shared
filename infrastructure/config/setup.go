@@ -3,7 +3,7 @@ package config
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/mercadocercano/go-shared/infrastructure/middleware"
+	"github.com/hornosg/go-shared/infrastructure/middleware"
 )
 
 // SharedConfig contiene la configuración para el módulo compartido

@@ -3,7 +3,7 @@ package notifications
 import (
 	"context"
 
-	"github.com/mercadocercano/go-shared/domain/port"
+	"github.com/hornosg/go-shared/domain/port"
 )
 
 // NoopNotificationGateway discards all notifications silently.

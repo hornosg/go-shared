@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	sharedport "github.com/mercadocercano/go-shared/domain/port"
+	sharedport "github.com/hornosg/go-shared/domain/port"
 )
 
 // canonicalLine is the single JSON log line emitted per security event.

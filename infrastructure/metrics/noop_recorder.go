@@ -1,6 +1,6 @@
 package metrics
 
-import sharedport "github.com/mercadocercano/go-shared/domain/port"
+import sharedport "github.com/hornosg/go-shared/domain/port"
 
 // NoopRecorder discards all metric events. Use in unit tests.
 type NoopRecorder struct{}
