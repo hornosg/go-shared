@@ -102,8 +102,13 @@ func (b *CriteriaBuilder) AddFilter(field string, operator FilterOperator, value
 	return b.WithFilter(field, operator, value)
 }
 
-// AddEqualFilter agrega un filtro de igualdad
+// AddEqualFilter agrega un filtro de igualdad.
+// Ignora strings vacíos para no generar condiciones `campo = ''` cuando el
+// valor viene de un query param ausente (consistente con AddLikeFilter/AddUUIDFilter).
 func (b *CriteriaBuilder) AddEqualFilter(field string, value interface{}) *CriteriaBuilder {
+	if str, ok := value.(string); ok && str == "" {
+		return b
+	}
 	return b.WithFilter(field, OpEqual, value)
 }
 

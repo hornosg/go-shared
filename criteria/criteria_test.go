@@ -63,6 +63,34 @@ func TestCriteriaBuilder_FilterParams(t *testing.T) {
 	}
 }
 
+func TestCriteriaBuilder_AddEqualFilter_SkipsEmptyString(t *testing.T) {
+	// Un string vacío (típico de un query param ausente) no debe generar
+	// una condición `campo = ''` que filtra todas las filas. Regresión del bug
+	// de listado de tenants en iam-service.
+	c := NewCriteriaBuilder().
+		AddEqualFilter("status", "").
+		AddEqualFilter("type", "ACTIVE").
+		Build()
+	if c.Filters.Count() != 1 {
+		t.Fatalf("expected 1 filter (empty status skipped), got %d", c.Filters.Count())
+	}
+	if c.Filters.Items[0].Field != "type" {
+		t.Errorf("expected surviving filter to be 'type', got %q", c.Filters.Items[0].Field)
+	}
+}
+
+func TestCriteriaBuilder_AddEqualFilter_KeepsNonStringZeroValues(t *testing.T) {
+	// Valores no-string (ej. 0, false) sí deben generar filtro: solo el string
+	// vacío se ignora.
+	c := NewCriteriaBuilder().
+		AddEqualFilter("count", 0).
+		AddEqualFilter("enabled", false).
+		Build()
+	if c.Filters.Count() != 2 {
+		t.Errorf("expected 2 filters for non-string zero values, got %d", c.Filters.Count())
+	}
+}
+
 func TestValidate_EmptyFilterField(t *testing.T) {
 	c := NewCriteria(NewFilters(NewFilter("", OpEqual, "x")), nil, NewPagination(1, 10))
 	if err := c.Validate(); err == nil {
