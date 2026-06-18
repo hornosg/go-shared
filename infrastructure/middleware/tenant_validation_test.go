@@ -97,6 +97,44 @@ func TestTenantValidation_NoAuthHeader(t *testing.T) {
 	}
 }
 
+// tokenWithoutTenant firma un token válido SIN claim tenant_id (simula un token de
+// servicio S2S legacy).
+func tokenWithoutTenant() string {
+	claims := jwt.MapClaims{
+		"user_id": "svc-onboarding",
+		"exp":     time.Now().Add(time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, _ := token.SignedString([]byte(testSecret))
+	return signed
+}
+
+// Default (RejectMissingTenant=false): el bypass histórico se preserva — un token sin
+// tenant_id pasa. Garantiza que activar el rollout no rompe la flota en bloque.
+func TestTenantValidation_MissingTenantClaim_BypassDefault(t *testing.T) {
+	r := setupRouter(TenantValidationConfig{JWTSecret: testSecret})
+	req, _ := http.NewRequest("GET", "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenWithoutTenant())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("default debe preservar el bypass (200), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Flag activado: el bypass se cierra — token sin tenant_id ⇒ 403 (cierra el IDOR).
+func TestTenantValidation_MissingTenantClaim_RejectWhenEnabled(t *testing.T) {
+	r := setupRouter(TenantValidationConfig{JWTSecret: testSecret, RejectMissingTenant: true})
+	req, _ := http.NewRequest("GET", "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenWithoutTenant())
+	req.Header.Set("X-Tenant-ID", "tenant-AAA")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Errorf("con RejectMissingTenant debe ser 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestTenantValidation_NamespaceMatch(t *testing.T) {
 	r := setupRouter(TenantValidationConfig{JWTSecret: testSecret, Namespace: "mc"})
 	token := generateTestToken("tenant-AAA", "mc")

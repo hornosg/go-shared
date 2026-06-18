@@ -24,6 +24,18 @@ type TenantValidationConfig struct {
 	ExcludedRoutes      []string
 	OnTenantMismatch    TenantMismatchHandler
 	OnNamespaceMismatch NamespaceMismatchHandler
+	// RejectMissingTenant cierra el bypass histórico (IDOR cross-tenant): cuando es true,
+	// un token SIN claim tenant_id se rechaza con 403 en vez de dejarlo pasar sin validar.
+	//
+	// Default false PRESERVA el comportamiento histórico para no romper en bloque a los 13
+	// servicios de la flota (algunos emisores S2S aún firman tokens sin tenant_id). Se debe
+	// activar EXPLÍCITAMENTE por servicio una vez verificado que ningún flujo legítimo
+	// depende del bypass. OBLIGATORIO en servicios que manejan dinero (caja/sales): un
+	// endpoint de caja NO puede exponerse con este flag en false.
+	//
+	// DEUDA DE ROLLOUT: el objetivo final es invertir este default a fail-closed una vez
+	// migrados todos los emisores S2S. Ver ADR/memoria del cierre de bypass de tenant.
+	RejectMissingTenant bool
 }
 
 // TenantValidation returns a Gin middleware that:
@@ -76,6 +88,18 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 
 		jwtTenantID, ok := claims["tenant_id"].(string)
 		if !ok || jwtTenantID == "" {
+			if cfg.RejectMissingTenant {
+				if cfg.OnTenantMismatch != nil {
+					userID, _ := claims["user_id"].(string)
+					cfg.OnTenantMismatch(userID, "", c.GetHeader("X-Tenant-ID"), c.ClientIP())
+				}
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": "Forbidden: token is missing tenant_id claim",
+				})
+				return
+			}
+			// Bypass histórico (default): pasa sin validar tenant. No setea jwt_claims/roles,
+			// por lo que RequireRole downstream falla-cerrado correctamente.
 			c.Next()
 			return
 		}
@@ -99,6 +123,7 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 
 		c.Set("tenant_id", jwtTenantID)
 		c.Set("jwt_claims", claims)
+		c.Set("roles", stringSliceClaim(claims, "roles"))
 		c.Next()
 	}
 }
