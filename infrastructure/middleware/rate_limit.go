@@ -32,8 +32,14 @@ type RateLimitConfig struct {
 	// FailClosed: si Redis no responde, rechazar (503) en vez de dejar pasar. Default
 	// false = fail-open (QoS). true solo para ops destructivas/caras (ADR-003 D6).
 	FailClosed bool
+	// ObserveOnly: mide y emite headers/callback pero NO rechaza (rollout seguro, ADR-003
+	// fase 3). Un exceso deja pasar el request y dispara OnLimitExceeded.
+	ObserveOnly bool
 	// OnBackendUnavailable se invoca cuando el backend (Redis) falla (para métricas/alerta).
 	OnBackendUnavailable func(c *gin.Context, err error)
+	// OnLimitExceeded se invoca cada vez que una request EXCEDE el límite (tanto en modo
+	// enforce como observe-only) — para métricas (ratelimit_rejected_total).
+	OnLimitExceeded func(c *gin.Context, feature string)
 }
 
 // RateLimit devuelve un middleware Gin que aplica el límite por (tenant, feature) según el
@@ -85,6 +91,14 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 
 		setRateLimitHeaders(c, decision)
 		if !decision.Allowed {
+			if cfg.OnLimitExceeded != nil {
+				cfg.OnLimitExceeded(c, cfg.Feature)
+			}
+			// Observe-only: medir y dejar pasar (rollout seguro, ADR-003 fase 3).
+			if cfg.ObserveOnly {
+				c.Next()
+				return
+			}
 			retry := int(math.Ceil(decision.RetryAfter.Seconds()))
 			if retry < 1 {
 				retry = 1

@@ -83,6 +83,30 @@ func TestRateLimit_AllowThenDeny(t *testing.T) {
 	}
 }
 
+func TestRateLimit_ObserveOnly(t *testing.T) {
+	exceeded := 0
+	mw := RateLimit(RateLimitConfig{
+		Limiter:         realLimiter(t),
+		Provider:        staticProvider{rule: ratelimit.Rule{Algorithm: ratelimit.AlgoSlidingWindow, Limit: 1, Window: time.Minute}, ok: true},
+		Feature:         "ai.bi_query",
+		ObserveOnly:     true,
+		OnLimitExceeded: func(_ *gin.Context, _ string) { exceeded++ },
+	})
+	r := engine(mw, "FREE")
+
+	if do(r).Code != http.StatusOK {
+		t.Fatal("observe-only: 1er request 200")
+	}
+	// El 2do excede el límite pero en observe-only NO se rechaza.
+	w2 := do(r)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("observe-only: 2do request debe pasar (no rechazar), got %d", w2.Code)
+	}
+	if exceeded != 1 {
+		t.Errorf("OnLimitExceeded debió dispararse 1 vez, got %d", exceeded)
+	}
+}
+
 func TestRateLimit_SinReglaPasa(t *testing.T) {
 	mw := RateLimit(RateLimitConfig{
 		Limiter:  realLimiter(t),
