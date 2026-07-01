@@ -124,8 +124,24 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 		c.Set("tenant_id", jwtTenantID)
 		c.Set("jwt_claims", claims)
 		c.Set("roles", stringSliceClaim(claims, "roles"))
+		if ns, ok := claims["namespace"].(string); ok && ns != "" {
+			c.Set("namespace", ns)
+		}
 		c.Next()
 	}
+}
+
+// NamespaceFromContext devuelve el claim "namespace" ya validado por este middleware, o
+// ("", false) si no vino en el token. Usar esto —nunca un header— para resolver el
+// namespace de servicios de plataforma compartidos entre proyectos (ej. notifications):
+// un header es controlado por el cliente y no pasó por la verificación de firma del JWT.
+func NamespaceFromContext(c *gin.Context) (string, bool) {
+	v, exists := c.Get("namespace")
+	if !exists {
+		return "", false
+	}
+	ns, ok := v.(string)
+	return ns, ok && ns != ""
 }
 
 func isExcluded(path string, excludedRoutes []string) bool {

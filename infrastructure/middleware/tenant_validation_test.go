@@ -33,6 +33,10 @@ func setupRouter(cfg TenantValidationConfig) *gin.Engine {
 	r.GET("/api/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
 	r.POST("/api/v1/auth/login", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
+	r.GET("/api/v1/namespace-probe", func(c *gin.Context) {
+		ns, ok := NamespaceFromContext(c)
+		c.JSON(200, gin.H{"namespace": ns, "ok": ok})
+	})
 	return r
 }
 
@@ -172,5 +176,27 @@ func TestTenantValidation_NamespaceNotConfigured_SkipsCheck(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Errorf("expected 200 when namespace not configured, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestTenantValidation_NamespacePropagatedFromJWTOnly reproduce el escenario del hallazgo
+// #1 del audit de notification-service (sesión E23, 2026-07-01): un servicio de plataforma
+// compartido entre proyectos (Namespace no configurado, así que no se fuerza un valor fijo)
+// debe poder leer el namespace real del JWT vía NamespaceFromContext — y un header
+// X-Namespace no autenticado enviado por el cliente no debe poder alterarlo.
+func TestTenantValidation_NamespacePropagatedFromJWTOnly(t *testing.T) {
+	r := setupRouter(TenantValidationConfig{JWTSecret: testSecret})
+	token := generateTestToken("tenant-AAA", "iteye")
+	req, _ := http.NewRequest("GET", "/api/v1/namespace-probe", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Tenant-ID", "tenant-AAA")
+	req.Header.Set("X-Namespace", "mc") // spoof: intenta pisar el namespace real del JWT
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if want := `{"namespace":"iteye","ok":true}`; w.Body.String() != want {
+		t.Errorf("namespace debía salir del JWT (iteye) ignorando el header spoofeado (mc); got %s", w.Body.String())
 	}
 }
