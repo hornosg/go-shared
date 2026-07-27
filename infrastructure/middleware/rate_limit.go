@@ -27,7 +27,10 @@ type RateLimitConfig struct {
 	Provider LimitsProvider
 	// Feature es el usecase costoso que protege este middleware (ej. "ai.bi_query").
 	Feature string
-	// KeyPrefix de la clave Redis (default "ratelimit").
+	// KeyPrefix es el project key del servicio según PLAT-E03 (ej. "mc", "iteye").
+	// Si está vacío se mantiene el formato legacy "ratelimit:<tenant_id>:<feature>" para
+	// compatibilidad con consumidores no migrados. Si se provee, la clave final es
+	// "<KeyPrefix>:<tenant_id>:ratelimit:<Feature>".
 	KeyPrefix string
 	// FailClosed: si Redis no responde, rechazar (503) en vez de dejar pasar. Default
 	// false = fail-open (QoS). true solo para ops destructivas/caras (ADR-003 D6).
@@ -46,11 +49,6 @@ type RateLimitConfig struct {
 // plan del tenant. Debe correr DESPUÉS de TenantValidation (depende de tenant_id/jwt_claims
 // en contexto). Emite headers RateLimit-* y responde 429 + Retry-After al exceder.
 func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
-	prefix := cfg.KeyPrefix
-	if prefix == "" {
-		prefix = "ratelimit"
-	}
-
 	return func(c *gin.Context) {
 		// Si falta cableado, no romper el request (defensivo).
 		if cfg.Limiter == nil || cfg.Provider == nil || cfg.Feature == "" {
@@ -74,7 +72,14 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
-		key := prefix + ":" + tenantID + ":" + cfg.Feature
+		var key string
+		if cfg.KeyPrefix == "" {
+			// Legacy: sin project key, el recurso va como primer segmento.
+			key = "ratelimit:" + tenantID + ":" + cfg.Feature
+		} else {
+			// PLAT-E03: <project_key>:<tenant_id>:<resource>:<id>
+			key = cfg.KeyPrefix + ":" + tenantID + ":ratelimit:" + cfg.Feature
+		}
 		decision, err := cfg.Limiter.Allow(c.Request.Context(), key, rule)
 		if err != nil {
 			if cfg.OnBackendUnavailable != nil {
