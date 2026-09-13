@@ -42,6 +42,10 @@ type TenantValidationConfig struct {
 //  1. Validates the "namespace" claim in the JWT matches cfg.Namespace (when configured).
 //  2. Validates the X-Tenant-ID request header matches the "tenant_id" claim in the JWT.
 func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
+	if strings.TrimSpace(cfg.JWTSecret) == "" {
+		panic("JWT_SECRET must not be empty")
+	}
+
 	return func(c *gin.Context) {
 		if isExcluded(c.Request.URL.Path, cfg.ExcludedRoutes) {
 			c.Next()

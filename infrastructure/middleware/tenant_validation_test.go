@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,56 @@ func setupRouter(cfg TenantValidationConfig) *gin.Engine {
 		c.JSON(200, gin.H{"namespace": ns, "ok": ok})
 	})
 	return r
+}
+
+func TestTenantValidation_EmptyJWTSecretPanics(t *testing.T) {
+	tests := map[string]string{
+		"empty":   "",
+		"spaces":  "   ",
+		"tab":     "\t",
+		"newline": "\n",
+	}
+
+	for name, secret := range tests {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil {
+					t.Fatal("expected TenantValidation to panic when JWT_SECRET is blank")
+				}
+				message, ok := recovered.(string)
+				if !ok || !strings.Contains(message, "JWT_SECRET") {
+					t.Fatalf("panic must name JWT_SECRET, got %#v", recovered)
+				}
+			}()
+
+			TenantValidation(TenantValidationConfig{JWTSecret: secret})
+		})
+	}
+}
+
+func TestTenantValidation_RejectsTokenSignedWithEmptySecret(t *testing.T) {
+	claims := jwt.MapClaims{
+		"tenant_id": "tenant-attacker",
+		"user_id":   "attacker",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	forged, err := token.SignedString([]byte(""))
+	if err != nil {
+		t.Fatalf("sign forged token: %v", err)
+	}
+
+	r := setupRouter(TenantValidationConfig{JWTSecret: testSecret})
+	req, _ := http.NewRequest("GET", "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+forged)
+	req.Header.Set("X-Tenant-ID", "tenant-attacker")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("token signed with an empty secret must be rejected: got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 func TestTenantValidation_MatchingTenant(t *testing.T) {
