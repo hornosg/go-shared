@@ -12,13 +12,17 @@ import (
 // data that belongs to no tenant (the global catalog, marketplace and business
 // types extracted into catalog-service, PLAT-E39).
 type PlatformAuthConfig struct {
+	// JWTSecret verifica los tokens HS256 (legacy, ventana dual de ACC-E03).
 	JWTSecret string
+	// JWTPublicKeyDir es el keyring RS256 (JWT_PUBLIC_KEY_DIR), mismo contrato que en
+	// TenantValidationConfig: obligatorio en release, roto → no arranca.
+	JWTPublicKeyDir string
 	// Namespace is the expected project namespace in the JWT claim (e.g. "mc").
 	// Empty disables namespace validation.
 	Namespace string
 }
 
-// VerifyPlatformJWT verifies the HS256 JWT signature INSIDE the service and leaves the
+// VerifyPlatformJWT verifies the JWT signature (HS256 legacy or RS256 by kid, ACC-E03 dual window) INSIDE the service and leaves the
 // role available in the Gin context under the same keys go-shared uses (`jwt_claims`,
 // `roles`), so it can be chained with RequireRole without any glue.
 //
@@ -38,6 +42,7 @@ type PlatformAuthConfig struct {
 // duplication — the raw `X-User-Role` hole implemented once per service — is what PLAT-E39
 // exists to close, so the control lives in the shared kernel, written once.
 func VerifyPlatformJWT(cfg PlatformAuthConfig) gin.HandlerFunc {
+	ring := resolvePublicKeyring(cfg.JWTPublicKeyDir)
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -59,13 +64,8 @@ func VerifyPlatformJWT(cfg PlatformAuthConfig) gin.HandlerFunc {
 		// (PLAT-E39 D3.2). Un token `system_admin` sin `exp` sería una llave maestra permanente
 		// sobre todo el catálogo. Exigir la presencia del claim es una línea; detectar la fuga de
 		// un token eterno, no. Condición vinculante del gate L4 (@dev-security, 2026-07-28).
-		_, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(cfg.JWTSecret), nil
-		}, jwt.WithExpirationRequired())
-		if err != nil {
+		// Regla dual de ACC-E03 (jwt_keyring.go): HS256 → secreto, RS256 → pública por kid.
+		if err := parseDual(tokenStr, claims, cfg.JWTSecret, ring, jwt.WithExpirationRequired()); err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			return
 		}

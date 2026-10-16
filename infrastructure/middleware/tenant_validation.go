@@ -16,7 +16,14 @@ type NamespaceMismatchHandler func(userID, jwtNamespace, expectedNamespace, ipAd
 
 // TenantValidationConfig holds configuration for the TenantValidation middleware.
 type TenantValidationConfig struct {
+	// JWTSecret verifica los tokens HS256 (legacy, ventana dual de ACC-E03). Sigue requerido
+	// mientras no haya keyring; T6 lo vuelve opcional y retira la rama HMAC.
 	JWTSecret string
+	// JWTPublicKeyDir es el keyring RS256 (JWT_PUBLIC_KEY_DIR): directorio con las públicas
+	// activas del firmador, una por *.pem, seleccionadas por el kid del header (ADR-003 addendum
+	// §C). Vacío → se toma JWT_PUBLIC_KEY_DIR del entorno. Obligatorio en GIN_MODE=release;
+	// configurado pero roto → el servicio no arranca.
+	JWTPublicKeyDir string
 	// Namespace is the expected project namespace (e.g. "mc" for mercado-cercano).
 	// When set, the JWT must carry a matching "namespace" claim.
 	// When empty, namespace validation is skipped — backwards-compatible behaviour.
@@ -45,6 +52,7 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 	if strings.TrimSpace(cfg.JWTSecret) == "" {
 		panic("JWT_SECRET must not be empty")
 	}
+	ring := resolvePublicKeyring(cfg.JWTPublicKeyDir)
 
 	return func(c *gin.Context) {
 		if isExcluded(c.Request.URL.Path, cfg.ExcludedRoutes) {
@@ -65,13 +73,8 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 		}
 
 		claims := jwt.MapClaims{}
-		_, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(cfg.JWTSecret), nil
-		})
-		if err != nil {
+		// Regla dual de ACC-E03 (jwt_keyring.go): HS256 → secreto, RS256 → pública por kid.
+		if err := parseDual(tokenStr, claims, cfg.JWTSecret, ring); err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			return
 		}
