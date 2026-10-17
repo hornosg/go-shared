@@ -12,7 +12,8 @@ import (
 // data that belongs to no tenant (the global catalog, marketplace and business
 // types extracted into catalog-service, PLAT-E39).
 type PlatformAuthConfig struct {
-	// JWTSecret verifica los tokens HS256 (legacy, ventana dual de ACC-E03).
+	// JWTSecret ya no verifica nada (ACC-E03 T6: sólo RS256 por kid). Opcional e ignorado
+	// (Deprecated: se retira en la próxima versión mayor).
 	JWTSecret string
 	// JWTPublicKeyDir es el keyring RS256 (JWT_PUBLIC_KEY_DIR), mismo contrato que en
 	// TenantValidationConfig: obligatorio en release, roto → no arranca.
@@ -22,7 +23,7 @@ type PlatformAuthConfig struct {
 	Namespace string
 }
 
-// VerifyPlatformJWT verifies the JWT signature (HS256 legacy or RS256 by kid, ACC-E03 dual window) INSIDE the service and leaves the
+// VerifyPlatformJWT verifies the JWT signature (RS256 by kid only since ACC-E03 T6; HS256 is rejected) INSIDE the service and leaves the
 // role available in the Gin context under the same keys go-shared uses (`jwt_claims`,
 // `roles`), so it can be chained with RequireRole without any glue.
 //

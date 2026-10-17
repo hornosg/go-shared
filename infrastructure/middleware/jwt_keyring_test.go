@@ -150,11 +150,18 @@ func TestDual_TenantValidation_RS256Valido_PasaYPueblaClaims(t *testing.T) {
 	}
 }
 
-func TestDual_TenantValidation_HS256Legacy_SigueAceptado(t *testing.T) {
+// ACC-E03 T6 (criterio c, flota): un HS256 firmado con el JWT_SECRET de la flota —el mismo valor
+// configurado en JWTSecret— se rechaza con 401 en los dos middlewares. Si diera 200 la raíz de
+// confianza seguiría compartida.
+func TestT6_HS256ConElSecretoDeLaFlota_401(t *testing.T) {
 	key := genRSAKey(t)
-	r := dualTenantRouter(t, keyringDir(t, &key.PublicKey))
-	if w := doBearer(r, "/api/v1/test", generateTestToken("tenant-a", "")); w.Code != http.StatusOK {
-		t.Fatalf("HS256 legacy durante la ventana dual: code=%d", w.Code)
+	dir := keyringDir(t, &key.PublicKey)
+	legacy := signLegacyHS256(userClaims())
+	if w := doBearer(dualTenantRouter(t, dir), "/api/v1/test", legacy); w.Code != http.StatusUnauthorized {
+		t.Errorf("TenantValidation aceptó HS256 tras el cutover: code=%d", w.Code)
+	}
+	if w := doBearer(dualPlatformRouter(t, dir), "/admin", legacy); w.Code != http.StatusUnauthorized {
+		t.Errorf("VerifyPlatformJWT aceptó HS256 tras el cutover: code=%d", w.Code)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Vector fijo: el kid derivado de la pública de T2 es el que emite iam-service (ADR-003 §c).
@@ -40,5 +42,21 @@ func TestKeyfunc_SecretoEnBlancoRechazaHS256(t *testing.T) {
 	// Un secreto de sólo espacios nunca es clave HMAC válida.
 	if kf := Keyfunc("   ", nil); kf == nil {
 		t.Fatal("Keyfunc nil")
+	}
+}
+
+// ACC-E03 T6: la rama HMAC no existe más. Un HS256 firmado con el mismo secreto que se le pasa a
+// ParseDual (el JWT_SECRET de la flota) se rechaza.
+func TestParseDual_T6_HS256ConElSecretoRechazado(t *testing.T) {
+	const secret = "fleet-shared-secret-at-least-32-characters"
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "u"}).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ParseDual(signed, jwt.MapClaims{}, secret, nil); err == nil {
+		t.Fatal("ParseDual aceptó HS256 tras el cutover de T6")
+	}
+	if len(AcceptedMethods) != 1 || AcceptedMethods[0] != jwt.SigningMethodRS256.Alg() {
+		t.Fatalf("AcceptedMethods = %v, se espera sólo RS256", AcceptedMethods)
 	}
 }

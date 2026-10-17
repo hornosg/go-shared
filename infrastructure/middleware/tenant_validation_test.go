@@ -3,7 +3,6 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,14 +21,16 @@ func generateTestToken(tenantID, namespace string) string {
 	if namespace != "" {
 		claims["namespace"] = namespace
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, _ := token.SignedString([]byte(testSecret))
+	signed, _ := signFixtureRS256(claims)
 	return signed
 }
 
 func setupRouter(cfg TenantValidationConfig) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	if cfg.JWTPublicKeyDir == "" {
+		cfg.JWTPublicKeyDir = fixtureKeyringDir()
+	}
 	r.Use(TenantValidation(cfg))
 	r.GET("/api/v1/test", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
 	r.POST("/api/v1/auth/login", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
@@ -41,28 +42,20 @@ func setupRouter(cfg TenantValidationConfig) *gin.Engine {
 	return r
 }
 
-func TestTenantValidation_EmptyJWTSecretPanics(t *testing.T) {
-	tests := map[string]string{
-		"empty":   "",
-		"spaces":  "   ",
-		"tab":     "\t",
-		"newline": "\n",
-	}
-
-	for name, secret := range tests {
+// ACC-E03 T6: JWTSecret dejó de verificar tokens → opcional. En blanco ya no impide arrancar, y un
+// token RS256 válido pasa igual.
+func TestTenantValidation_T6_JWTSecretOpcional(t *testing.T) {
+	for name, secret := range map[string]string{"empty": "", "spaces": "   ", "tab": "\t"} {
 		t.Run(name, func(t *testing.T) {
-			defer func() {
-				recovered := recover()
-				if recovered == nil {
-					t.Fatal("expected TenantValidation to panic when JWT_SECRET is blank")
-				}
-				message, ok := recovered.(string)
-				if !ok || !strings.Contains(message, "JWT_SECRET") {
-					t.Fatalf("panic must name JWT_SECRET, got %#v", recovered)
-				}
-			}()
-
-			TenantValidation(TenantValidationConfig{JWTSecret: secret})
+			r := setupRouter(TenantValidationConfig{JWTSecret: secret})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("Authorization", "Bearer "+generateTestToken("tenant-abc", ""))
+			req.Header.Set("X-Tenant-ID", "tenant-abc")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("RS256 válido con JWTSecret en blanco: code=%d body=%s", w.Code, w.Body.String())
+			}
 		})
 	}
 }
@@ -159,8 +152,7 @@ func tokenWithoutTenant() string {
 		"user_id": "svc-onboarding",
 		"exp":     time.Now().Add(time.Hour).Unix(),
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, _ := token.SignedString([]byte(testSecret))
+	signed, _ := signFixtureRS256(claims)
 	return signed
 }
 

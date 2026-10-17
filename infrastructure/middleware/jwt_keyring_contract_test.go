@@ -185,16 +185,13 @@ func TestContratoT5b_SecretoVacioConKeyring(t *testing.T) {
 	}
 
 	gin.SetMode(gin.TestMode)
-	// ADR-003 addendum §C: JWTSecret sigue REQUERIDO en TenantValidation durante la ventana dual
-	// (retirarlo es de T6): sin secreto, aun con keyring, no arranca.
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("TenantValidation con JWTSecret vacío y keyring debe hacer panic (secreto requerido en la ventana dual)")
-			}
-		}()
-		TenantValidation(TenantValidationConfig{JWTSecret: "", JWTPublicKeyDir: dir, RejectMissingTenant: true})
-	}()
+	// ACC-E03 T6: JWTSecret es opcional — sin secreto, con keyring, arranca y rechaza el HS256.
+	tv := gin.New()
+	tv.Use(TenantValidation(TenantValidationConfig{JWTSecret: "", JWTPublicKeyDir: dir, RejectMissingTenant: true}))
+	tv.GET("/api/v1/test", func(c *gin.Context) { c.Status(200) })
+	if w := doBearer(tv, "/api/v1/test", emptyStr); w.Code != http.StatusUnauthorized {
+		t.Errorf("TenantValidation HS256 con secreto vacío: code=%d, se espera 401", w.Code)
+	}
 
 	pa := gin.New()
 	pa.Use(VerifyPlatformJWT(PlatformAuthConfig{JWTSecret: "", JWTPublicKeyDir: dir, Namespace: "mc"}))

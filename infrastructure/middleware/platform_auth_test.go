@@ -12,7 +12,7 @@ import (
 
 const platformTestSecret = "test-secret-min-32-chars-for-hs256-xxxxx"
 
-// platformSignToken firma un JWT HS256 con los claims dados, mismo esquema que iam-service.
+// platformSignToken firma un JWT RS256 con kid (fixture de paquete), mismo esquema que iam-service tras ACC-E03.
 //
 // Completa `exp` con una hora hacia adelante si el caller no lo fijó, porque el middleware ahora
 // lo EXIGE (jwt.WithExpirationRequired). Los tests que quieren probar la expiración pasan el suyo:
@@ -25,8 +25,7 @@ func platformSignToken(t *testing.T, claims jwt.MapClaims) string {
 	if claims["exp"] == nil {
 		delete(claims, "exp") // el caller pidió explícitamente un token SIN exp
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(platformTestSecret))
+	signed, err := signFixtureRS256(claims)
 	if err != nil {
 		t.Fatalf("no se pudo firmar el token de test: %v", err)
 	}
@@ -39,7 +38,7 @@ func platformRouter() *gin.Engine {
 	router := gin.New()
 	group := router.Group("/api/v1")
 	group.Use(
-		VerifyPlatformJWT(PlatformAuthConfig{JWTSecret: platformTestSecret, Namespace: "mc"}),
+		VerifyPlatformJWT(PlatformAuthConfig{JWTPublicKeyDir: fixtureKeyringDir(), Namespace: "mc"}),
 		RequireRole("system_admin"),
 	)
 	group.GET("/whoami", func(c *gin.Context) {

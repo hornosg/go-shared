@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.19.0
+
+- ACC-E03 T6: corte de HS256. `TenantValidation`, `VerifyPlatformJWT` y `jwtkeyring.Keyfunc/ParseDual`
+  aceptan SÓLO RS256 con la pública cuyo `kid` está en el keyring (`JWT_PUBLIC_KEY_DIR`). Un token HS256
+  (aun firmado con el secreto de la flota), `alg:none` u otro algoritmo -> 401.
+- `JWTSecret` pasa a ser opcional e ignorado en `TenantValidationConfig` y `PlatformAuthConfig`
+  (Deprecated; se conserva el campo para no romper la compilación de los consumidores).
+  `TenantValidation` ya no hace panic con `JWT_SECRET` vacío.
+- **Incompatible en operación:** todo emisor que firme HS256 deja de ser aceptado por la flota.
+  El keyring sigue siendo obligatorio (mismo fail-closed que v0.18.0).
+
 ## v0.18.0
 
 - ACC-E03 T5b: aceptación dual en la ventana de cutover a firma asimétrica (ADR-003 §f, addendum T5a).

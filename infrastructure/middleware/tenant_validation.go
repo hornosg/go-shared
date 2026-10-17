@@ -16,8 +16,9 @@ type NamespaceMismatchHandler func(userID, jwtNamespace, expectedNamespace, ipAd
 
 // TenantValidationConfig holds configuration for the TenantValidation middleware.
 type TenantValidationConfig struct {
-	// JWTSecret verifica los tokens HS256 (legacy, ventana dual de ACC-E03). Sigue requerido
-	// mientras no haya keyring; T6 lo vuelve opcional y retira la rama HMAC.
+	// JWTSecret ya no verifica nada: ACC-E03 T6 cerró la ventana dual y los tokens de usuario se
+	// verifican sólo con RS256 por kid. Opcional e ignorado; se conserva para no romper la
+	// compilación de los consumidores (Deprecated: se retira en la próxima versión mayor).
 	JWTSecret string
 	// JWTPublicKeyDir es el keyring RS256 (JWT_PUBLIC_KEY_DIR): directorio con las públicas
 	// activas del firmador, una por *.pem, seleccionadas por el kid del header (ADR-003 addendum
@@ -49,9 +50,6 @@ type TenantValidationConfig struct {
 //  1. Validates the "namespace" claim in the JWT matches cfg.Namespace (when configured).
 //  2. Validates the X-Tenant-ID request header matches the "tenant_id" claim in the JWT.
 func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
-	if strings.TrimSpace(cfg.JWTSecret) == "" {
-		panic("JWT_SECRET must not be empty")
-	}
 	ring := resolvePublicKeyring(cfg.JWTPublicKeyDir)
 
 	return func(c *gin.Context) {

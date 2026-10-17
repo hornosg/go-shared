@@ -1,6 +1,6 @@
-// Package jwtkeyring verifica tokens de usuario de la flota durante la ventana dual de ACC-E03
-// (HS256 legacy + RS256 por kid). No depende de gin, así que lo pueden consumir servicios chi
-// (webdata) y verificadores propios (catalog) sin copiar el selector criptográfico.
+// Package jwtkeyring verifica tokens de usuario de la flota con RS256 por kid (ACC-E03). No
+// depende de gin, así que lo pueden consumir servicios chi (webdata) y verificadores propios
+// (catalog) sin copiar el selector criptográfico.
 package jwtkeyring
 
 import (
@@ -21,23 +21,20 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Aceptación dual de la ventana de cutover de ACC-E03 (ADR-003 §f + addendum T5a §C, rev. 2).
+// Verificación de tokens de usuario tras el cutover de ACC-E03 (T6, ADR-003 §f + addendum T5a).
 //
 // Regla de selección — por el header del token, nunca por intento y error:
 //
-//	alg HS256        → SÓLO el secreto legacy (JWT_SECRET)
 //	alg RS256        → la pública cuyo kid coincide con el del header (keyring JWT_PUBLIC_KEY_DIR)
-//	none / cualquier → rechazo
+//	HS256 / none / … → rechazo
 //
-// Jamás la pública RSA como secreto HMAC (confusión RS/HS): la rama HS256 sólo devuelve el
-// secreto, y la RS256 sólo devuelve un *rsa.PublicKey, que el método HMAC no acepta como clave.
-// El parser además fija WithValidMethods(AcceptedMethods) como doble control espejo (T4).
-//
-// T6 retira la rama HMAC y vuelve opcional JWTSecret.
+// Hasta v0.18.0 había una ventana dual que aceptaba HS256 con el secreto compartido de la flota
+// (JWT_SECRET). T6 la cerró: ningún secreto simétrico verifica tokens de usuario. El parámetro
+// secret de Keyfunc/ParseDual se conserva para no romper la compilación de los consumidores y se
+// IGNORA (Deprecated: se retira en la próxima versión mayor).
 
-// AcceptedMethods: HS256 fijado (no la familia HMAC completa — no hay emisores HS384/HS512
-// en el lab, verificado en T5a) + RS256.
-var AcceptedMethods = []string{jwt.SigningMethodHS256.Alg(), jwt.SigningMethodRS256.Alg()}
+// AcceptedMethods: sólo RS256. Doble control espejo de Keyfunc vía WithValidMethods.
+var AcceptedMethods = []string{jwt.SigningMethodRS256.Alg()}
 
 const (
 	keyringKIDPrefix    = "acc"
@@ -196,36 +193,31 @@ func Resolve(configured string, release bool) (*Keyring, error) {
 	return Load(dir)
 }
 
-// Keyfunc implementa la regla de selección dual. secret vacío → la rama HS256 rechaza (nunca
-// HMAC con clave vacía); ring nil → la rama RS256 rechaza.
-func Keyfunc(secret string, ring *Keyring) jwt.Keyfunc {
+// Keyfunc implementa la regla RS256-only: la pública del keyring por el kid del header; ring nil →
+// rechaza todo. secret se ignora (Deprecated, ver arriba): un HS256 se rechaza aunque venga
+// firmado con el JWT_SECRET de la flota.
+func Keyfunc(_ string, ring *Keyring) jwt.Keyfunc {
 	return func(t *jwt.Token) (interface{}, error) {
-		switch t.Method.Alg() {
-		case jwt.SigningMethodHS256.Alg():
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok || strings.TrimSpace(secret) == "" {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(secret), nil
-		case jwt.SigningMethodRS256.Alg():
-			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			kid, _ := t.Header["kid"].(string)
-			if kid == "" {
-				return nil, errors.New("token RS256 sin kid en el header")
-			}
-			pub, ok := ring.PublicKeyFor(kid)
-			if !ok {
-				return nil, fmt.Errorf("kid desconocido o retirado: %s", kid)
-			}
-			return pub, nil
-		default:
+		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 			return nil, fmt.Errorf("método de firma no aceptado: %v", t.Header["alg"])
 		}
+		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		kid, _ := t.Header["kid"].(string)
+		if kid == "" {
+			return nil, errors.New("token RS256 sin kid en el header")
+		}
+		pub, ok := ring.PublicKeyFor(kid)
+		if !ok {
+			return nil, fmt.Errorf("kid desconocido o retirado: %s", kid)
+		}
+		return pub, nil
 	}
 }
 
-// ParseDual parsea con la regla dual + WithValidMethods como doble control.
+// ParseDual parsea con Keyfunc + WithValidMethods(AcceptedMethods) como doble control. Conserva el
+// nombre de la ventana dual por compatibilidad; desde T6 sólo acepta RS256 (secret se ignora).
 func ParseDual(tokenStr string, claims jwt.Claims, secret string, ring *Keyring, opts ...jwt.ParserOption) error {
 	opts = append([]jwt.ParserOption{jwt.WithValidMethods(AcceptedMethods)}, opts...)
 	_, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, claims, Keyfunc(secret, ring))
