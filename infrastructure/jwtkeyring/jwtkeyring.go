@@ -196,7 +196,16 @@ func Resolve(configured string, release bool) (*Keyring, error) {
 // Keyfunc implementa la regla RS256-only: la pública del keyring por el kid del header; ring nil →
 // rechaza todo. secret se ignora (Deprecated, ver arriba): un HS256 se rechaza aunque venga
 // firmado con el JWT_SECRET de la flota.
+//
+// Deprecated: usar RS256Keyfunc, que no recibe secreto. Se retira en la próxima versión mayor.
 func Keyfunc(_ string, ring *Keyring) jwt.Keyfunc {
+	return RS256Keyfunc(ring)
+}
+
+// RS256Keyfunc es la regla RS256-only sin parámetro de secreto (ACC-E09 T3a, ADR-006 «Contrato de
+// go-shared»): la pública del keyring por el kid del header; cualquier otro alg o ring nil → rechazo.
+// Es la que usan los verificadores nuevos (s2stoken); no hay forma de pasarle un secreto simétrico.
+func RS256Keyfunc(ring *Keyring) jwt.Keyfunc {
 	return func(t *jwt.Token) (interface{}, error) {
 		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 			return nil, fmt.Errorf("método de firma no aceptado: %v", t.Header["alg"])
@@ -218,8 +227,8 @@ func Keyfunc(_ string, ring *Keyring) jwt.Keyfunc {
 
 // ParseDual parsea con Keyfunc + WithValidMethods(AcceptedMethods) como doble control. Conserva el
 // nombre de la ventana dual por compatibilidad; desde T6 sólo acepta RS256 (secret se ignora).
-func ParseDual(tokenStr string, claims jwt.Claims, secret string, ring *Keyring, opts ...jwt.ParserOption) error {
+func ParseDual(tokenStr string, claims jwt.Claims, _ string, ring *Keyring, opts ...jwt.ParserOption) error {
 	opts = append([]jwt.ParserOption{jwt.WithValidMethods(AcceptedMethods)}, opts...)
-	_, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, claims, Keyfunc(secret, ring))
+	_, err := jwt.NewParser(opts...).ParseWithClaims(tokenStr, claims, RS256Keyfunc(ring))
 	return err
 }

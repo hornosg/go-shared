@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.20.0
+
+- ACC-E09 T3a: nuevo paquete `infrastructure/s2stoken` (sin gin ni `net/http`), núcleo del token de
+  servicio S2S de ADR-006 (iam-service `docs/adr`). Define los claims (`aud` string, nunca array) y las
+  constantes de contrato que importan iam y los receptores: `Issuer` (`iam-service/s2s`), `UserIssuer`
+  (`iam-service`), `TokenUse` (`service`), `TokenType` (`s2s+jwt`), `AssertionAudience`
+  (`iam-service/s2s/token`), `IAMAudience` (`account-service`), `TenantScopeUser`/`TenantScopeSystem`,
+  `TTL` (300 s) y `Leeway` (30 s).
+- `s2stoken.Verify(token, Config) (Principal, error)`: RS256 por `kid` contra el keyring de iam, `typ`,
+  `iss`, `token_use`, `exp`/`iat` obligatorios con vida ≤ TTL, `aud` igual al receptor, `sub`/`jti`,
+  `tenant_scope`, `namespace` y los scopes que exige la ruta. Errores tipados `ErrUnauthenticated` (401)
+  y `ErrForbidden` (403, namespace ajeno o scope insuficiente); `StatusCode(err)` los traduce. Sin rama
+  HMAC ni parámetro de secreto. Una `Config` sin keyring, `Audience` o `Namespace` rechaza todo.
+  Review L4 de T3a: `RequiredScopes` vacío también rechaza todo salvo `AnyScope: true` explícito (por
+  defecto se deniega), `Audience` no puede ser el de la aserción de iam y el parser usa decodificación
+  estricta.
+- `jwtkeyring.RS256Keyfunc(ring)`: la regla RS256-only sin parámetro de secreto. `Keyfunc(secret, ring)`
+  queda Deprecated (delega en ella); `ParseDual` la usa internamente. Sin cambio de comportamiento.
+- Compatible: ningún verificador existente cambia. El rechazo de `token_use=service` en los verificadores
+  de usuario (`TenantValidation`, `VerifyPlatformJWT`) llega en T3.
+
 ## v0.19.0
 
 - ACC-E03 T6: corte de HS256. `TenantValidation`, `VerifyPlatformJWT` y `jwtkeyring.Keyfunc/ParseDual`

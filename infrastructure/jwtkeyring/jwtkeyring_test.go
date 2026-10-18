@@ -60,3 +60,17 @@ func TestParseDual_T6_HS256ConElSecretoRechazado(t *testing.T) {
 		t.Fatalf("AcceptedMethods = %v, se espera sólo RS256", AcceptedMethods)
 	}
 }
+
+// ACC-E09 T3a: la variante sin secreto aplica la misma regla RS256-only.
+func TestRS256Keyfunc_SinSecretoRechazaHS256YRingNil(t *testing.T) {
+	kf := RS256Keyfunc(nil)
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "x"})
+	if _, err := kf(tok); err == nil {
+		t.Fatal("HS256 debía rechazarse")
+	}
+	rs := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "x"})
+	rs.Header["kid"] = "acc-000000000000"
+	if _, err := kf(rs); err == nil {
+		t.Fatal("ring nil debía rechazar todo")
+	}
+}
