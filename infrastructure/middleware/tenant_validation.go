@@ -6,6 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/hornosg/go-shared/infrastructure/s2stoken"
 )
 
 // TenantMismatchHandler is called when the X-Tenant-ID header does not match the JWT tenant_id claim.
@@ -73,6 +75,12 @@ func TenantValidation(cfg TenantValidationConfig) gin.HandlerFunc {
 		claims := jwt.MapClaims{}
 		// Regla dual de ACC-E03 (jwt_keyring.go): HS256 → secreto, RS256 → pública por kid.
 		if err := parseDual(tokenStr, claims, cfg.JWTSecret, ring); err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
+		}
+		// ACC-E09 T3: un token de servicio (token_use=service, iss=iam-service/s2s) nunca vale como
+		// usuario, aunque esté firmado por la misma clave de iam: sólo se acepta desde X-Service-Token.
+		if err := s2stoken.CheckUserClaims(claims); err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			return
 		}

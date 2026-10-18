@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.21.0
+
+- ACC-E09 T3 (ADR-006 de iam-service): cliente emisor, combinador receptor y adaptadores del token de
+  servicio S2S. Sin rama HMAC ni parámetro de secreto compartido.
+- **Incompatible para tokens de usuario sin `iss`:** `TenantValidation` y `VerifyPlatformJWT` aplican
+  `s2stoken.CheckUserClaims`: rechazan con 401 un token con `token_use` (el de servicio, aunque lo firme
+  la misma clave de iam) y exigen `iss=iam-service`. Los tokens reales de iam lo llevan desde
+  `63a0329` (2026-09-04); los fixtures de test de cada consumidor tienen que agregarlo (T3b).
+- `s2stoken`: `CheckUserClaims`, `RedactHeaders` (redacta `Authorization`, `X-Service-Token`,
+  `X-Api-Key`, cookies) y las constantes `HeaderServiceToken`/`HeaderTenantID`. Sigue sin gin ni
+  `net/http`.
+- `s2stoken/receiver` (sin gin ni `net/http`): `Authenticate(cfg, X-Service-Token, Authorization,
+  X-Tenant-ID)` aplica `S2S_DENY_SUB` → `Verify` → denegación por `sub` → `tenant_scope` permitido por
+  la ruta (C-1: `AllowUser`; `System` = `SystemDenied` por defecto | `SystemGlobal` | `SystemPerTenant`;
+  `SystemOnlyScopes` con token `user` → 403) → regla de `X-Tenant-ID` de ADR-006 (token `user`: Bearer
+  ausente o inválido 401, Bearer sin `tenant_id` 403 sin importar `RejectMissingTenant`, header ausente
+  → se usa el tenant del Bearer, header distinto → 403 + log `s2s_tenant_mismatch`; token `system`: el
+  Bearer se ignora). `ParseDenySub`: un valor no parseable rechaza todo token de servicio y mantiene el
+  tráfico de usuarios. `VerifyUser` para receptores sin middleware propio.
+- `middleware/s2sauth` (gin) y `s2stoken/s2shttp` (`net/http`, para webdata): el combinador decide por la
+  presencia de `X-Service-Token`; sin él rige la credencial heredada que se le pase (nil → 401); con él
+  y un token inválido → 401 **sin** caer a la heredada. Respuesta genérica sólo con
+  `StatusCode` (C-2); logs estructurados con slog, nunca el token; `s2s_auth=token|legacy_key`.
+- `s2stoken/client`: `LoadPrivateKey`, `New(Config)`, `Token(ctx, aud, scopes...)` con caché por
+  `(aud, scope)` renovado a los `exp − 60 s`, `Invalidate`, timeout (5 s), circuit breaker (5 fallos
+  consecutivos, 30 s abierto, medio abierto después; con el circuito abierto devuelve el token cacheado
+  aún vigente o `ErrCircuitOpen`), métrica `s2s_token_issue_errors_total{aud,reason}`, `Transport`
+  (pone `X-Service-Token` y re-emite una sola vez ante 401) y `ModeFor(destino)` sobre
+  `S2S_MODE_<DESTINO>=token|legacy` (ausente → legacy; otro valor → error).
+- `s2stoken/s2stest`: fixtures RS256 (clave efímera de iam, keyring, tokens de servicio y de usuario)
+  para los tests de la flota.
+- Review L4 de T3 (O-1..O-3, N-3): el combinador decide por **presencia** del header (`X-Service-Token`
+  vacío o repetido → 401, nunca la heredada); `client.Transport` no adjunta el token a una redirección
+  (`req.Response != nil`) y el cliente de emisión no sigue redirecciones (`CheckRedirect` →
+  `ErrUseLastResponse`); un 401 del receptor ya no descarta a ciegas el token: `Client.Refresh` es
+  single-flight y no re-emite un token más joven que `MinReissueAge` (30 s); el circuito es **por aud**,
+  sólo cuentan transporte, 5xx, 429 y respuesta ilegible (no los 4xx permanentes ni la cancelación del
+  request, que ahora tampoco cuelga la emisión), y un 4xx de iam aplica `DefaultRetryBackoff` (5 s);
+  `SystemPerTenant` valida que `X-Tenant-ID` sea un UUID canónico (36 caracteres) y lo normaliza.
+  `Client.Refresh` fuerza la renovación sin vaciar la entrada: con iam caído el token vigente sigue
+  sirviendo hasta su `exp`.
+
 ## v0.20.0
 
 - ACC-E09 T3a: nuevo paquete `infrastructure/s2stoken` (sin gin ni `net/http`), núcleo del token de

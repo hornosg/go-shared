@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/hornosg/go-shared/infrastructure/s2stoken"
 )
 
 // Fixture RS256 de paquete para los tests de happy path que no tienen *testing.T a mano
@@ -46,6 +48,15 @@ func rs256Fixture() (*rsa.PrivateKey, string) {
 }
 
 func signFixtureRS256(claims jwt.MapClaims) (string, error) {
+	// Los tokens de usuario reales llevan iss=iam-service (iam 63a0329); desde ACC-E09 T3 los
+	// verificadores de usuario lo exigen. Un test que necesite un token sin iss usa signFixtureRaw.
+	if _, ok := claims["iss"]; !ok {
+		claims["iss"] = s2stoken.UserIssuer
+	}
+	return signFixtureRaw(claims)
+}
+
+func signFixtureRaw(claims jwt.MapClaims) (string, error) {
 	key, _ := rs256Fixture()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = KeyringKID(&key.PublicKey)
