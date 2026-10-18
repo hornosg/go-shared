@@ -205,6 +205,8 @@ func Keyfunc(_ string, ring *Keyring) jwt.Keyfunc {
 // RS256Keyfunc es la regla RS256-only sin parámetro de secreto (ACC-E09 T3a, ADR-006 «Contrato de
 // go-shared»): la pública del keyring por el kid del header; cualquier otro alg o ring nil → rechazo.
 // Es la que usan los verificadores nuevos (s2stoken); no hay forma de pasarle un secreto simétrico.
+// OJO: por sí sola NO sirve para verificar tokens de usuario (no mira iss ni token_use): un token de
+// servicio pasaría. Para tokens de usuario usar s2stoken.ParseUser (F-1 de la revisión L4 de T3b).
 func RS256Keyfunc(ring *Keyring) jwt.Keyfunc {
 	return func(t *jwt.Token) (interface{}, error) {
 		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
@@ -225,6 +227,9 @@ func RS256Keyfunc(ring *Keyring) jwt.Keyfunc {
 	}
 }
 
+// Deprecated: para tokens de USUARIO usar s2stoken.ParseUser, que además aplica CheckUserClaims
+// (rechaza token_use=service, exige iss=iam-service — ACC-E09 T3b, N-1). ParseDual sólo verifica firma.
+//
 // ParseDual parsea con Keyfunc + WithValidMethods(AcceptedMethods) como doble control. Conserva el
 // nombre de la ventana dual por compatibilidad; desde T6 sólo acepta RS256 (secret se ignora).
 func ParseDual(tokenStr string, claims jwt.Claims, _ string, ring *Keyring, opts ...jwt.ParserOption) error {

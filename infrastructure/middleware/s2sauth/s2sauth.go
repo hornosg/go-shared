@@ -57,7 +57,17 @@ func Middleware(cfg receiver.Config, legacy gin.HandlerFunc) gin.HandlerFunc {
 			return
 		}
 
-		res, err := receiver.Authenticate(cfg, serviceToken, c.GetHeader("Authorization"), c.GetHeader(s2stoken.HeaderTenantID))
+		authorization, okAuth := s2stoken.SingleHeader(c.Request.Header, "Authorization")
+		tenantHeader, okTenant := s2stoken.SingleHeader(c.Request.Header, s2stoken.HeaderTenantID)
+		if !okAuth {
+			abort(c, s2stoken.ErrUnauthenticated)
+			return
+		}
+		if !okTenant {
+			abort(c, s2stoken.ErrForbidden)
+			return
+		}
+		res, err := receiver.Authenticate(cfg, serviceToken, authorization, tenantHeader)
 		if err != nil {
 			log.Warn("s2s_auth_rejected", "event", "s2s_auth_rejected", "s2s_auth", "token",
 				"status", s2stoken.StatusCode(err), "reason", err.Error(), "path", c.FullPath())
@@ -72,6 +82,11 @@ func Middleware(cfg receiver.Config, legacy gin.HandlerFunc) gin.HandlerFunc {
 		if res.UserClaims != nil {
 			c.Set("jwt_claims", res.UserClaims)
 			c.Set("roles", res.Roles)
+		}
+		// Paridad con TenantValidation (N-4): los handlers que leen "namespace" ven el del usuario
+		// en tenant_scope=user (ya igualado al esperado por el combinador) y el del token en system.
+		if ns := res.Namespace(); ns != "" {
+			c.Set("namespace", ns)
 		}
 		log.Debug("s2s_auth", "s2s_auth", "token", "sub", res.Service.Subject, "path", c.FullPath())
 		c.Next()

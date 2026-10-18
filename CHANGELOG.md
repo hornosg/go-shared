@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.22.0
+
+- ACC-E09 T3b (notas de la revisión L4 de T3). Compatible salvo `LoadPrivateKey` (ver abajo).
+- `s2stoken.ParseUser(token, claims, ring)` (sin opciones del parser: un `jwt.WithoutClaimsValidation` del
+  llamador anularía el `exp` obligatorio, C-1 de la revisión; el `exp` se comprueba además sobre el
+  payload, así que un struct propio no puede mentir sobre él): único verificador de tokens de **usuario** para
+  receptores sin los middlewares de go-shared (webdata, catalog — N-1). RS256 por `kid`, `exp`
+  obligatorio y `CheckUserClaims` aplicado sobre el payload completo aunque `claims` sea un struct
+  propio que no declare `token_use` ni `iss`. `receiver.VerifyUser` delega en él.
+  `jwtkeyring.ParseDual` queda Deprecated para tokens de usuario (sólo verifica firma).
+- `s2stoken.SingleHeader`: `s2sauth` y `s2shttp` rechazan `Authorization` repetido (401) y
+  `X-Tenant-ID` repetido (403) en requests con `X-Service-Token` (H-4).
+- `s2sauth` deja `namespace` en el contexto gin como `TenantValidation` (N-4); `receiver.Result.Namespace()`.
+- `receiver.DenyListFromEnv(reg, log)`: lee `S2S_DENY_SUB` y registra `s2s_deny_sub_invalid` (gauge,
+  1 ante un valor no parseable) y `s2s_deny_sub_rejections_total` (N-2). Una coma final o un nombre no
+  canónico rechazan **todo** token de servicio (falla cerrada); el tráfico de usuarios sigue. Durante
+  el modo dual `S2S_DENY_SUB` no corta la credencial heredada del mismo emisor: el runbook de
+  incidente rota también esa key.
+- **Incompatible:** `client.LoadPrivateKey` rechaza una privada accesible por grupo u otros (exige
+  `0600` o más restrictivo, N-5). Los emisores montan su clave con ese modo (T4).
+- Tests del cliente (H-6, sin cambio de código): el circuito de un `aud` no corta la emisión hacia otro
+  ni se cierra por el éxito del otro; `Refresh` adopta el token que renovó otro llamador sin volver a
+  llamar a iam (aun con iam caído) y no adopta uno vencido.
+
 ## v0.21.0
 
 - ACC-E09 T3 (ADR-006 de iam-service): cliente emisor, combinador receptor y adaptadores del token de

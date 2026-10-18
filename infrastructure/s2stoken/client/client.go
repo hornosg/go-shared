@@ -423,8 +423,26 @@ func normalizeScope(scopes []string) string {
 
 // LoadPrivateKey lee la privada RSA del emisor (PKCS#8 o PKCS#1, ≥ 2048 bits) generada por
 // s2s-keygen. La pública correspondiente vive en infra/s2s-keys/<servicio>/.
+//
+// La clave sólo se lee si el archivo no es accesible por grupo ni por otros (modo ≤ 0600, N-5 de
+// la revisión de T3): una privada legible por el resto del host permite firmar aserciones a
+// nombre del servicio, así que se rechaza al arrancar en vez de usarse.
 func LoadPrivateKey(path string) (*rsa.PrivateKey, error) {
-	raw, err := os.ReadFile(path)
+	// Se abre una sola vez y se comprueba el modo del MISMO descriptor que se lee: no hay ventana entre
+	// el stat y la lectura (F-4 de la revisión L4 de T3b). Stat sigue symlinks (secrets de k8s).
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("s2s client: leer clave privada: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("s2s client: leer clave privada: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf("s2s client: la clave privada tiene permisos %#o; se exige 0600 o más restrictivo", perm)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("s2s client: leer clave privada: %w", err)
 	}

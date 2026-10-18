@@ -50,7 +50,17 @@ func Middleware(cfg receiver.Config, legacy func(http.Handler) http.Handler) fun
 				legacyHandler.ServeHTTP(w, r)
 				return
 			}
-			res, err := receiver.Authenticate(cfg, serviceToken, r.Header.Get("Authorization"), r.Header.Get(s2stoken.HeaderTenantID))
+			authorization, okAuth := s2stoken.SingleHeader(r.Header, "Authorization")
+			tenantHeader, okTenant := s2stoken.SingleHeader(r.Header, s2stoken.HeaderTenantID)
+			if !okAuth {
+				writeError(w, s2stoken.ErrUnauthenticated)
+				return
+			}
+			if !okTenant {
+				writeError(w, s2stoken.ErrForbidden)
+				return
+			}
+			res, err := receiver.Authenticate(cfg, serviceToken, authorization, tenantHeader)
 			if err != nil {
 				log.Warn("s2s_auth_rejected", "event", "s2s_auth_rejected", "s2s_auth", "token",
 					"status", s2stoken.StatusCode(err), "reason", err.Error(), "path", r.URL.Path)

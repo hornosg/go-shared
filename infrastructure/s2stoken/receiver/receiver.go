@@ -11,8 +11,11 @@
 package receiver
 
 import (
+	"os"
+
 	"errors"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -70,6 +73,16 @@ type Result struct {
 	Roles      []string
 }
 
+// Namespace es el namespace efectivo del request: el del Bearer en tenant_scope=user (el combinador
+// ya lo igualó al esperado) y el del token de servicio en system. Paridad con TenantValidation (N-4).
+func (r Result) Namespace() string {
+	if r.UserClaims != nil {
+		ns, _ := r.UserClaims["namespace"].(string)
+		return ns
+	}
+	return r.Service.Namespace
+}
+
 // Authenticate aplica el combinador sobre un request que trae X-Service-Token. serviceToken vacío
 // es un error de programación del adaptador (sin header rige la credencial heredada) → 401.
 func Authenticate(cfg Config, serviceToken, authorization, tenantHeader string) (Result, error) {
@@ -81,6 +94,7 @@ func Authenticate(cfg Config, serviceToken, authorization, tenantHeader string) 
 		return Result{}, unauthenticated("X-Service-Token ausente")
 	}
 	if cfg.DenySub.invalid {
+		denySubRejections.Inc()
 		log.Warn("s2s_deny_sub_invalid", "event", "s2s_deny_sub_invalid")
 		return Result{}, unauthenticated("S2S_DENY_SUB no parseable: se rechaza todo token de servicio")
 	}
@@ -90,6 +104,7 @@ func Authenticate(cfg Config, serviceToken, authorization, tenantHeader string) 
 		return Result{}, err
 	}
 	if cfg.DenySub.Denies(p.Subject) {
+		denySubRejections.Inc()
 		log.Warn("s2s_deny_sub", "event", "s2s_deny_sub", "sub", p.Subject, "jti", p.ID)
 		return Result{}, unauthenticated("emisor en S2S_DENY_SUB")
 	}
@@ -176,15 +191,7 @@ func VerifyUser(bearer string, ring *jwtkeyring.Keyring) (jwt.MapClaims, error) 
 		return nil, unauthenticated("keyring ausente")
 	}
 	claims := jwt.MapClaims{}
-	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{"RS256"}),
-		jwt.WithExpirationRequired(),
-		jwt.WithLeeway(s2stoken.Leeway),
-	)
-	if _, err := parser.ParseWithClaims(bearer, claims, jwtkeyring.RS256Keyfunc(ring)); err != nil {
-		return nil, unauthenticated("Bearer de usuario inválido")
-	}
-	if err := s2stoken.CheckUserClaims(claims); err != nil {
+	if err := s2stoken.ParseUser(bearer, claims, ring); err != nil {
 		return nil, err
 	}
 	return claims, nil
@@ -216,6 +223,51 @@ func ParseDenySub(raw string) (DenyList, error) {
 		d.subs[name] = struct{}{}
 	}
 	return d, nil
+}
+
+// EnvDenySub es la variable de la lista de emisores denegados (ADR-006 «Revocación»).
+const EnvDenySub = "S2S_DENY_SUB"
+
+var (
+	denySubInvalid = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "s2s_deny_sub_invalid",
+		Help: "1 si S2S_DENY_SUB no es parseable y el receptor rechaza todo token de servicio (ADR-006).",
+	})
+	denySubRejections = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "s2s_deny_sub_rejections_total",
+		Help: "Tokens de servicio rechazados por S2S_DENY_SUB (emisor denegado o lista no parseable).",
+	})
+)
+
+// DenyListFromEnv es el cableado recomendado de S2S_DENY_SUB (N-2 de la revisión de T3): lee la
+// variable, registra en reg las métricas s2s_deny_sub_invalid (gauge, «en alto» ante un valor no
+// parseable) y s2s_deny_sub_rejections_total, y loguea el error sin impedir el arranque. reg nil →
+// prometheus.DefaultRegisterer; registrar dos veces en el mismo registro no es error. Una coma
+// final o un nombre no canónico dejan la lista en «rechazar todo token de servicio» (falla cerrada,
+// documentada en el CHANGELOG); el tráfico de usuarios y la credencial heredada siguen.
+func DenyListFromEnv(reg prometheus.Registerer, log *slog.Logger) DenyList {
+	if reg == nil {
+		reg = prometheus.DefaultRegisterer
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	for _, c := range []prometheus.Collector{denySubInvalid, denySubRejections} {
+		if err := reg.Register(c); err != nil {
+			var already prometheus.AlreadyRegisteredError
+			if !errors.As(err, &already) {
+				log.Error("s2s_deny_sub_metric", "event", "s2s_deny_sub_metric", "error", err.Error())
+			}
+		}
+	}
+	d, err := ParseDenySub(os.Getenv(EnvDenySub))
+	if err != nil {
+		denySubInvalid.Set(1)
+		log.Error("s2s_deny_sub_invalid", "event", "s2s_deny_sub_invalid", "error", err.Error())
+	} else {
+		denySubInvalid.Set(0)
+	}
+	return d
 }
 
 // Invalid informa si la lista quedó en modo «rechazar todo token de servicio».

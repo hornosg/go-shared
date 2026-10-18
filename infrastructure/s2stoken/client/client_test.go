@@ -350,3 +350,27 @@ func TestRefresh_ConIAMCaidoConservaElTokenVigente(t *testing.T) {
 		t.Fatalf("la entrada se vació con iam caído: tok=%q err=%v", again, err)
 	}
 }
+
+// N-5 (revisión de T3): una privada legible por grupo u otros no se usa.
+func TestLoadPrivateKey_RechazaPermisosAbiertos(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	der, _ := x509.MarshalPKCS8PrivateKey(key)
+	raw := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	for _, mode := range []os.FileMode{0o644, 0o640, 0o604} {
+		p := filepath.Join(t.TempDir(), "k.pem")
+		if err := os.WriteFile(p, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadPrivateKey(p); err == nil {
+			t.Fatalf("modo %#o aceptado", mode)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "k.pem")
+	_ = os.WriteFile(p, raw, 0o400)
+	if _, err := LoadPrivateKey(p); err != nil {
+		t.Fatalf("modo 0400 rechazado: %v", err)
+	}
+}
