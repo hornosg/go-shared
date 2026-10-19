@@ -82,7 +82,10 @@ type Config struct {
 }
 
 type entry struct {
-	mu        sync.Mutex
+	// lock es el single-flight de la entrada: un canal de capacidad 1 en vez de un sync.Mutex para que
+	// quien espera pueda abandonar con su contexto (H-3 de la revisión L4 de T3). Lo libera quien lo
+	// tomó o, si hubo emisión, la goroutine que la corre.
+	lock      chan struct{}
 	token     string
 	issuedAt  time.Time
 	renewAt   time.Time
@@ -190,9 +193,14 @@ func (c *Client) Token(ctx context.Context, aud string, scopes ...string) (strin
 		return "", errors.New("s2s client: aud y scope son obligatorios")
 	}
 	e := c.entry(aud, scope)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return c.obtainLocked(ctx, e, aud, scope)
+	if err := e.acquire(ctx); err != nil {
+		return "", err
+	}
+	tok, err, handedOff := c.obtainLocked(ctx, e, aud, scope)
+	if !handedOff {
+		e.release()
+	}
+	return tok, err
 }
 
 // Refresh es la reacción a un 401 del receptor para el token `sent`. Single-flight por entrada: si otro
@@ -205,19 +213,26 @@ func (c *Client) Refresh(ctx context.Context, sent, aud string, scopes ...string
 		return "", false, errors.New("s2s client: aud y scope son obligatorios")
 	}
 	e := c.entry(aud, scope)
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	if err := e.acquire(ctx); err != nil {
+		return "", false, err
+	}
 	now := c.cfg.Now()
 	if e.token != "" && e.token != sent && now.Before(e.expiresAt) {
-		return e.token, true, nil
+		tok := e.token
+		e.release()
+		return tok, true, nil
 	}
 	if e.token == sent && now.Sub(e.issuedAt) < MinReissueAge {
+		e.release()
 		return "", false, nil
 	}
 	// Se fuerza la renovación SIN vaciar la entrada: si iam no responde (circuito abierto, backoff 4xx) el
 	// token vigente sigue sirviendo hasta su exp (H-2 de la revisión L4 de T3).
 	e.renewAt = time.Time{}
-	tok, err := c.obtainLocked(ctx, e, aud, scope)
+	tok, err, handedOff := c.obtainLocked(ctx, e, aud, scope)
+	if !handedOff {
+		e.release()
+	}
 	if err != nil || tok == sent {
 		return "", false, err // sin token distinto del rechazado no hay reintento útil
 	}
@@ -228,38 +243,80 @@ func (c *Client) Refresh(ctx context.Context, sent, aud string, scopes ...string
 // Transport usa Refresh, que no descarta a ciegas.
 func (c *Client) Invalidate(aud string, scopes ...string) {
 	e := c.entry(aud, normalizeScope(scopes))
-	e.mu.Lock()
+	_ = e.acquire(context.Background())
 	e.token, e.issuedAt, e.renewAt, e.expiresAt = "", time.Time{}, time.Time{}, time.Time{}
-	e.mu.Unlock()
+	e.release()
 }
 
-// obtainLocked devuelve el token cacheado o lo emite. Llamar con e.mu tomado.
-func (c *Client) obtainLocked(ctx context.Context, e *entry, aud, scope string) (string, error) {
+// acquire toma el single-flight de la entrada o abandona cuando el contexto del llamador termina. Si la
+// entrada está libre la toma aunque el contexto ya esté cancelado: así un token cacheado sigue sirviendo.
+func (e *entry) acquire(ctx context.Context) error {
+	select {
+	case e.lock <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case e.lock <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *entry) release() { <-e.lock }
+
+// obtainLocked devuelve el token cacheado o lo emite. Llamar con el single-flight de e tomado.
+// handedOff=true significa que la emisión quedó en curso en otra goroutine, que es la que libera el
+// single-flight: el llamador NO debe liberarlo.
+func (c *Client) obtainLocked(ctx context.Context, e *entry, aud, scope string) (tok string, err error, handedOff bool) {
 	now := c.cfg.Now()
 	if e.token != "" && now.Before(e.renewAt) {
-		return e.token, nil
+		return e.token, nil, false
 	}
 	valid := e.token != "" && now.Before(e.expiresAt)
 	// Rechazo permanente reciente de iam: no se vuelve a pedir hasta el backoff.
 	if e.lastErr != nil && now.Before(e.retryAt) {
 		if valid {
-			return e.token, nil
+			return e.token, nil, false
 		}
-		return "", e.lastErr
+		return "", e.lastErr, false
 	}
 	if !c.allow(aud, now) {
 		c.errors.WithLabelValues(aud, "circuit_open").Inc()
 		// Un token todavía vigente (aunque ya en ventana de renovación) es mejor que ninguno.
 		if valid {
-			return e.token, nil
+			return e.token, nil, false
 		}
-		return "", ErrCircuitOpen
+		return "", ErrCircuitOpen, false
 	}
 	// La emisión no cuelga del contexto del request del usuario: su cancelación no es un fallo de iam
-	// ni debe abortar una renovación que sirve a los demás requests.
+	// ni debe abortar una renovación que sirve a los demás requests. Corre en su propia goroutine, que
+	// guarda el resultado y libera el single-flight; el llamador espera el resultado o su contexto
+	// (H-3 de la revisión L4 de T3), lo que llegue primero.
 	ictx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.cfg.Timeout)
-	defer cancel()
-	token, ttl, reason, err := c.issue(ictx, aud, scope, now)
+	type result struct {
+		tok string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer cancel()
+		defer e.release()
+		tok, err := c.issueAndStore(ictx, e, aud, scope, now, valid)
+		done <- result{tok, err}
+	}()
+	select {
+	case r := <-done:
+		return r.tok, r.err, true
+	case <-ctx.Done():
+		return "", ctx.Err(), true
+	}
+}
+
+// issueAndStore emite y guarda el resultado en la entrada. Corre con el single-flight de e tomado.
+func (c *Client) issueAndStore(ctx context.Context, e *entry, aud, scope string, now time.Time, valid bool) (string, error) {
+	token, ttl, reason, err := c.issue(ctx, aud, scope, now)
 	if err != nil {
 		c.errors.WithLabelValues(aud, reason).Inc()
 		if tripsBreaker(reason) {
@@ -297,7 +354,7 @@ func (c *Client) entry(aud, scope string) *entry {
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
 	if !ok {
-		e = &entry{}
+		e = &entry{lock: make(chan struct{}, 1)}
 		c.entries[key] = e
 	}
 	return e

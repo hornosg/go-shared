@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -51,16 +52,28 @@ func parseMode(raw string) (Mode, error) {
 //
 // Nunca adjunta el token a una request que es una redirección (req.Response != nil): un receptor que
 // responde 302 hacia otro host no recibe la credencial (O-2 de la revisión L4 de T3).
+//
+// Host fija el único destino (host[:puerto] de la URL, sin distinguir mayúsculas) al que se adjunta el
+// token: un request a otro host falla con ErrHostMismatch sin salir, así un http.Client compartido o una
+// URL mal configurada no entregan la credencial a un tercero (H-7 de la revisión L4 de T3). Es opcional
+// para no romper a quien ya lo usa; todo emisor nuevo (desde ACC-E09 T4) lo configura.
 type Transport struct {
 	Base     http.RoundTripper
 	Client   *Client
 	Audience string
 	Scopes   []string
+	Host     string
 }
+
+// ErrHostMismatch: el request iba a un host distinto del Host configurado en el Transport.
+var ErrHostMismatch = errors.New("s2s client: host del request distinto del destino del Transport")
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Response != nil {
 		return t.base().RoundTrip(req) // redirección: sin credencial
+	}
+	if t.Host != "" && !strings.EqualFold(req.URL.Host, strings.TrimSpace(t.Host)) {
+		return nil, ErrHostMismatch
 	}
 	token, err := t.Client.Token(req.Context(), t.Audience, t.Scopes...)
 	if err != nil {

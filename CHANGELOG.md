@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.23.0
+
+- ACC-E09 T4 (precondiciones de la revisión L4 de T3, H-3 y H-7). Compatible: `Host` es opcional.
+- `client.Transport.Host`: fija el único destino (host[:puerto]) al que se adjunta el token; un request a
+  otro host falla con `client.ErrHostMismatch` sin salir. Obligatorio para todo emisor nuevo (T4 en
+  adelante); opcional para no romper a quien ya usa el `Transport`.
+- Single-flight de la emisión **cancelable por el llamador**: la espera sobre una entrada ya no es un
+  `sync.Mutex` sino un canal que abandona con el contexto del request. Con iam colgado, los requests
+  encolados dejan de esperar `FailureThreshold × Timeout` y vuelven con su propio deadline; la emisión en
+  curso sigue y se cachea para los demás. Una entrada libre se toma aunque el contexto esté cancelado, así
+  un token cacheado sigue sirviendo.
+
 ## v0.22.0
 
 - ACC-E09 T3b (notas de la revisión L4 de T3). Compatible salvo `LoadPrivateKey` (ver abajo).
